@@ -2,7 +2,7 @@
 import json
 import os
 
-from qwen_agent.llm.openvino import OpenVINO
+from openvino_llm import OpenVINO
 
 # Example dummy function hard coded to return the same weather
 # In production, this could be your backend API or an external API
@@ -21,7 +21,7 @@ def get_current_weather(location, unit='fahrenheit'):
 def test():
     llm = OpenVINO({
         # Use the model service provided by DashScope:
-        'model_dir': 'Qwen2-72B-Instruct-ov',
+        'ov_model_dir': '/home/ethan/intel/Qwen-Agent/examples/Qwen2-7B-Instruct-ov',
     })
 
     # Step 1: send the conversation and available functions to the model
@@ -49,9 +49,8 @@ def test():
     responses = []
     for responses in llm.chat(messages=messages, functions=functions, stream=True):
         print(responses)
-
     messages.extend(responses)  # extend conversation with assistant's reply
-
+    print(messages)
     # Step 2: check if the model wanted to call a function
     last_response = messages[-1]
     if last_response.get('function_call', None):

@@ -1,6 +1,3 @@
-import os
-from http import HTTPStatus
-from pprint import pformat
 from typing import Dict, Iterator, List, Optional
 from threading import Thread
 
@@ -8,7 +5,7 @@ from optimum.intel.openvino import OVModelForCausalLM
 from transformers import (AutoTokenizer, AutoConfig,
                           TextIteratorStreamer, StoppingCriteriaList, StoppingCriteria)
 
-from qwen_agent.llm.base import ModelServiceError, register_llm
+from qwen_agent.llm.base import register_llm
 from qwen_agent.llm.schema import ASSISTANT, DEFAULT_SYSTEM_MESSAGE, SYSTEM, USER, Message
 from qwen_agent.llm.text_base import BaseTextChatModel
 from qwen_agent.log import logger
@@ -44,14 +41,17 @@ class OpenVINO(BaseTextChatModel):
 
     def __init__(self, cfg: Optional[Dict] = None):
         super().__init__(cfg)
+        if 'ov_model_dir' not in cfg:
+            raise ValueError(
+                f'Please provide openvino model directory through `ov_model_dir` in cfg')
+
         self.ov_model = OVModelForCausalLM.from_pretrained(
-            cfg.get('model_dir', 'model'),
+            cfg['ov_model_dir'],
             device=cfg.get('device', 'cpu'),
             ov_config=cfg.get('ov_config', {}),
-            config=AutoConfig.from_pretrained(cfg.get('model_dir', 'model')),
-            trust_remote_code=True,
+            config=AutoConfig.from_pretrained(cfg['ov_model_dir']),
         )
-        self.tokenizer = AutoTokenizer.from_pretrained(cfg["model_dir"])
+        self.tokenizer = AutoTokenizer.from_pretrained(cfg["ov_model_dir"])
 
     def _chat_stream(
         self,
@@ -65,40 +65,22 @@ class OpenVINO(BaseTextChatModel):
         input_token = self.tokenizer(prompt, return_tensors="pt").input_ids
         streamer = TextIteratorStreamer(
             self.tokenizer, timeout=60.0, skip_prompt=True, skip_special_tokens=True)
-        generate_kwargs = dict(
+        generate_cfg.update(dict(
             input_ids=input_token,
-            max_new_tokens=generate_cfg.get('max_new_tokens', 1024),
             streamer=streamer,
+            max_new_tokens = generate_cfg.get('max_new_tokens', 1024),
             stopping_criteria=StoppingCriteriaList(
-            [StopSequenceCriteria(generate_cfg['stop'], self.tokenizer)])
-        )
-
+                [StopSequenceCriteria(generate_cfg['stop'], self.tokenizer)])
+        ))
+        del generate_cfg['stop']
         def generate_and_signal_complete():
-            self.ov_model.generate(**generate_kwargs)
+            self.ov_model.generate(**generate_cfg)
         t1 = Thread(target=generate_and_signal_complete)
         t1.start()
-
-        if delta_stream:
-            last_len = 0
-            delay_len = 5
-            in_delay = False
-            text = ''
-            for new_text in streamer:
-                if (len(new_text) - last_len) <= delay_len:
-                    in_delay = True
-                    continue
-                else:
-                    in_delay = False
-                    real_text = new_text[:-delay_len]
-                    now_rsp = real_text[last_len:]
-                    yield [Message(ASSISTANT, now_rsp)]
-                    last_len = len(real_text)
-            if text and (in_delay or (last_len != len(new_text))):
-                yield [Message(ASSISTANT, new_text[last_len:])]
-
-        else:
-            for new_text in streamer:
-                yield [Message(ASSISTANT, new_text)]
+        partial_text = ""
+        for new_text in streamer:
+            partial_text += new_text
+            yield [Message(ASSISTANT, partial_text)]
 
     def _chat_no_stream(
         self,
@@ -108,14 +90,17 @@ class OpenVINO(BaseTextChatModel):
         prompt = self._build_text_completion_prompt(messages)
         logger.debug(f'*{prompt}*')
         input_token = self.tokenizer(prompt, return_tensors="pt").input_ids
-        generate_kwargs = dict(
+        generate_cfg.update(dict(
             input_ids=input_token,
-            max_new_tokens=generate_cfg.get('max_new_tokens', 1024),
+            max_new_tokens = generate_cfg.get('max_new_tokens', 1024),
             stopping_criteria=StoppingCriteriaList(
-            [StopSequenceCriteria(generate_cfg['stop'], self.tokenizer)])
-        )
-        response = self.ov_model.generate(**generate_kwargs)
-        answer = self.tokenizer.batch_decode(response, skip_special_tokens=True)[0]
+                [StopSequenceCriteria(generate_cfg['stop'], self.tokenizer)])
+        ))
+        del generate_cfg['stop']
+        response = self.ov_model.generate(**generate_cfg)
+        response = response[:, len(input_token[0]):]
+        answer = self.tokenizer.batch_decode(
+            response, skip_special_tokens=True)[0]
         return [Message(ASSISTANT, answer)]
 
     @staticmethod
