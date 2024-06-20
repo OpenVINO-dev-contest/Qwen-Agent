@@ -38,6 +38,31 @@ class StopSequenceCriteria(StoppingCriteria):
 
 @register_llm('openvino')
 class OpenVINO(BaseTextChatModel):
+    """OpenVINO Pipeline API.
+
+    To use, you should have the ``optimum[openvino,nncf]`` python package installed.
+
+    Example export and quantizie from_model_id by command line:
+        optimum-cli export openvino --model Qwen/Qwen2-7B-Instruct --task text-generation-with-past --weight-format int4 --group-size 128 --ratio 0.8 Qwen2-7B-Instruct-ov
+    
+    Example passing pipeline in directly:
+        llm_cfg = {
+            'ov_model_dir': 'Qwen2-7B-Instruct-ov',
+            'model_type': 'openvino'
+            }
+        system_instruction = '''You are a helpful assistant.
+        After receiving the user's request, you should:
+        - first draw an image and obtain the image url,
+        - then run code `request.get(image_url)` to download the image,
+        - and finally select an image operation from the given document to process the image.
+        Please show the image using `plt.show()`.'''
+        tools = ['my_image_gen', 'code_interpreter']
+        files = ['./examples/resource/doc.pdf']
+        bot = Assistant(llm=llm_cfg,
+                system_message=system_instruction,
+                function_list=tools,
+                files=files)
+    """
 
     def __init__(self, cfg: Optional[Dict] = None):
         super().__init__(cfg)
@@ -68,11 +93,12 @@ class OpenVINO(BaseTextChatModel):
         generate_cfg.update(dict(
             input_ids=input_token,
             streamer=streamer,
-            max_new_tokens = generate_cfg.get('max_new_tokens', 1024),
+            max_new_tokens=generate_cfg.get('max_new_tokens', 1024),
             stopping_criteria=StoppingCriteriaList(
                 [StopSequenceCriteria(generate_cfg['stop'], self.tokenizer)])
         ))
         del generate_cfg['stop']
+
         def generate_and_signal_complete():
             self.ov_model.generate(**generate_cfg)
         t1 = Thread(target=generate_and_signal_complete)
@@ -92,7 +118,7 @@ class OpenVINO(BaseTextChatModel):
         input_token = self.tokenizer(prompt, return_tensors="pt").input_ids
         generate_cfg.update(dict(
             input_ids=input_token,
-            max_new_tokens = generate_cfg.get('max_new_tokens', 1024),
+            max_new_tokens=generate_cfg.get('max_new_tokens', 1024),
             stopping_criteria=StoppingCriteriaList(
                 [StopSequenceCriteria(generate_cfg['stop'], self.tokenizer)])
         ))

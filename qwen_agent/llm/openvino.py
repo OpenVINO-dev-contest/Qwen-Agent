@@ -38,17 +38,18 @@ class StopSequenceCriteria(StoppingCriteria):
         decoded_output = self.tokenizer.decode(input_ids.tolist()[0])
         return any(decoded_output.endswith(stop_sequence) for stop_sequence in self.stop_sequences)
 
+
 @register_llm('openvino')
 class OpenVINO(BaseTextChatModel):
 
     def __init__(self, cfg: Optional[Dict] = None):
         super().__init__(cfg)
+        model_dir = cfg['ov_model_dir']
         self.ov_model = OVModelForCausalLM.from_pretrained(
             cfg.get('model_dir', 'model'),
             device=cfg.get('device', 'cpu'),
             ov_config=cfg.get('ov_config', {}),
             config=AutoConfig.from_pretrained(cfg.get('model_dir', 'model')),
-            trust_remote_code=True,
         )
         self.tokenizer = AutoTokenizer.from_pretrained(cfg["model_dir"])
 
@@ -58,12 +59,13 @@ class OpenVINO(BaseTextChatModel):
         delta_stream: bool,
         generate_cfg: dict,
     ) -> Iterator[List[Message]]:
-        
+
         prompt = self._build_text_completion_prompt(messages)
         logger.debug(f'*{prompt}*')
         input_token = self.tokenizer(prompt, return_tensors="pt").input_ids
         generate_cfg["input_ids"] = input_token
-        generate_cfg['stopping_criteria'] = generate_cfg['stop']
+        generate_cfg['stopping_criteria'] = StoppingCriteriaList(
+            [StopSequenceCriteria(generate_cfg['stop'], self.tokenizer)])
         streamer = TextIteratorStreamer(
             self.tokenizer, timeout=60.0, skip_prompt=True, skip_special_tokens=True)
         generate_cfg["streamer"] = streamer
@@ -104,7 +106,8 @@ class OpenVINO(BaseTextChatModel):
         logger.debug(f'*{prompt}*')
         input_token = self.tokenizer(prompt, return_tensors="pt").input_ids
         generate_cfg["input_ids"] = input_token
-        generate_cfg['stopping_criteria'] = generate_cfg['stop']
+        generate_cfg['stopping_criteria'] = StoppingCriteriaList(
+            [StopSequenceCriteria(generate_cfg['stop'], self.tokenizer)])
         response = self.ov_model.generate(**generate_cfg)
         return [Message(ASSISTANT, response)]
 
